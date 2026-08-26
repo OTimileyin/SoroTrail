@@ -24,6 +24,7 @@ import (
 
 	"github.com/sorotrail/sorotrail/internal/api"
 	"github.com/sorotrail/sorotrail/internal/api/graphql"
+	"github.com/sorotrail/sorotrail/internal/archive"
 	"github.com/sorotrail/sorotrail/internal/audit"
 	"github.com/sorotrail/sorotrail/internal/broadcast"
 	"github.com/sorotrail/sorotrail/internal/config"
@@ -248,6 +249,7 @@ func run() error {
 	ing := ingester.New(countingClient, st, decode.XDRDecoder{}, log, ingester.Options{
 		PollInterval:            cfg.PollInterval,
 		StartLedger:             cfg.StartLedger,
+		StartLedgerRaw:          cfg.StartLedgerRaw,
 		RetentionLedgers:        cfg.RetentionLedgers,
 		LagWarnLedgers:          cfg.LagWarnLedgers,
 		SweepConcurrency:        cfg.SweepConcurrency,
@@ -293,7 +295,19 @@ func run() error {
 		BatchSize: cfg.RetentionBatchSize,
 		Pause:     cfg.RetentionPause,
 		Interval:  cfg.RetentionInterval,
+		DryRun:    cfg.RetentionDryRun,
 	})
+	if cfg.ArchiveEnabled {
+		archiver := archive.NewFS(archive.Options{
+			Dir:    ".",
+			Prefix: cfg.ArchivePrefix,
+		}, log)
+		prn.SetArchiver(archiver)
+		log.Info("archive enabled",
+			"bucket", cfg.ArchiveBucket,
+			"prefix", cfg.ArchivePrefix,
+		)
+	}
 	if cfg.RetentionEnabled() {
 		api.SetPruner(prn)
 	}

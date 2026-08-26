@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sorotrail/sorotrail/internal/archive"
 	"github.com/sorotrail/sorotrail/internal/store"
 )
 
@@ -113,6 +114,36 @@ func (m *mockStore) ListWatchedContracts(context.Context) ([]store.WatchedContra
 
 func (m *mockStore) AddWatchedContract(_ context.Context, id string) error {
 	return nil
+}
+
+func (m *mockStore) GetEventsByLedgerRange(_ context.Context, fromLedger, toLedger int64) ([]store.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.Event
+	for _, e := range m.events {
+		if e.Ledger >= fromLedger && e.Ledger <= toLedger {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) CountEventsBefore(_ context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, e := range m.events {
+		if e.Ledger < maxLedger {
+			if !beforeTime.IsZero() && !e.CreatedAt.Before(beforeTime) {
+				continue
+			}
+			count++
+			if count >= int64(limit) {
+				break
+			}
+		}
+	}
+	return count, nil
 }
 
 func (m *mockStore) DeleteEventsBefore(_ context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
@@ -378,4 +409,95 @@ func TestPrunerEmptyStore(t *testing.T) {
 // CountContracts satisfies store.Store; unused by these tests.
 func (m *mockStore) CountContracts(context.Context, store.ContractsFilter) (int64, error) {
 	return 0, nil
+}
+
+func TestPrunerDryRun(t *testing.T) {
+	st := newMockStore()
+	st.setIngestionState(100)
+	st.addEvent("e1", 50, time.Now().Add(-24*time.Hour))
+	st.addEvent("e2", 90, time.Now().Add(-24*time.Hour))
+
+	prn := New(st, slog.New(slog.NewTextHandler(nopWriter{}, nil)), Options{
+		MinLedger: 80,
+		BatchSize: 10,
+		DryRun:    true,
+	})
+	require.True(t, prn.Enabled())
+
+	total, err := prn.pruneOnce(context.Background())
+	require.NoError(t, err)
+	// e1 (ledger 50) is below min 80 -> reported eligible but NOT deleted.
+	// e2 (ledger 90) is at or above min 80 -> kept.
+	assert.Equal(t, int64(1), total)
+	assert.Equal(t, 2, st.eventCount(), "dry-run must not delete any events")
+}
+
+func TestPrunerDryRunMetrics(t *testing.T) {
+	st := newMockStore()
+	st.setIngestionState(100)
+	for i := 0; i < 5; i++ {
+		st.addEvent(string(rune('a'+i)), int64(50+i), time.Now().Add(-24*time.Hour))
+	}
+
+	prn := New(st, slog.New(slog.NewTextHandler(nopWriter{}, nil)), Options{
+		MinLedger: 55,
+		BatchSize: 10,
+		DryRun:    true,
+	})
+
+	total, err := prn.pruneOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), total)
+
+	m := prn.Metrics()
+	assert.Equal(t, int64(0), m.TotalRowsPurged, "dry-run must not count as purged")
+	assert.Equal(t, int64(5), m.DryRunEligibleRows, "dry-run must report eligible rows")
+}
+
+type mockArchiver struct {
+	mu       sync.Mutex
+	batches  []archive.Manifest
+	archiveErr error
+}
+
+func (a *mockArchiver) ArchiveEvents(_ context.Context, events []store.Event, fromLedger, toLedger int64) (string, archive.Manifest, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.archiveErr != nil {
+		return "", archive.Manifest{}, a.archiveErr
+	}
+	m := archive.Manifest{
+		FromLedger: fromLedger,
+		ToLedger:   toLedger,
+		EventCount: len(events),
+	}
+	a.batches = append(a.batches, m)
+	return "mock://archive", m, nil
+}
+
+func (a *mockArchiver) archivedCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.batches)
+}
+
+func TestPrunerArchivesBeforeDelete(t *testing.T) {
+	st := newMockStore()
+	st.setIngestionState(100)
+	st.addEvent("e1", 50, time.Now().Add(-24*time.Hour))
+	st.addEvent("e2", 90, time.Now().Add(-24*time.Hour))
+
+	arch := &mockArchiver{}
+	prn := New(st, slog.New(slog.NewTextHandler(nopWriter{}, nil)), Options{
+		MinLedger: 80,
+		BatchSize: 10,
+	})
+	prn.SetArchiver(arch)
+	require.True(t, prn.Enabled())
+
+	total, err := prn.pruneOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total, "e1 should be deleted")
+	assert.Equal(t, 1, st.eventCount(), "e2 should remain")
+	assert.Equal(t, 1, arch.archivedCount(), "archiver should have been called once")
 }

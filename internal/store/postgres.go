@@ -1410,6 +1410,32 @@ func (p *Postgres) frontierStats(ctx context.Context) (Stats, error) {
 	return s, nil
 }
 
+// CountEventsBefore counts events strictly below maxLedger and (if
+// beforeTime is non-zero) older than beforeTime. The count is limited
+// by limit, matching DeleteEventsBefore's batching contract.
+func (p *Postgres) CountEventsBefore(ctx context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	var where string
+	var args []any
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	where = "ledger < " + arg(maxLedger)
+	if !beforeTime.IsZero() {
+		where += " AND created_at < " + arg(beforeTime)
+	}
+	q := fmt.Sprintf(`SELECT count(*) FROM (SELECT 1 FROM events WHERE %s LIMIT %d) sub`, where, limit)
+	var total int64
+	err := p.pool.QueryRow(ctx, q, args...).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("counting events before ledger %d: %w", maxLedger, err)
+	}
+	return total, nil
+}
+
 // DeleteEventsBefore deletes up to limit events that are strictly below
 // maxLedger and (if beforeTime is non-zero) older than beforeTime. It is
 // designed for the background pruner and intentionally never touches rows
@@ -1999,6 +2025,35 @@ func (p *Postgres) CountAddressEvents(ctx context.Context, address string) (int6
 		return 0, fmt.Errorf("counting address events for %s: %w", address, err)
 	}
 	return total, nil
+}
+
+// GetEventsByLedgerRange returns all events in the inclusive
+// [fromLedger, toLedger] range, ordered by ID ascending. Used by the
+// archiver to export batches before the pruner deletes them.
+func (p *Postgres) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	var events []Event
+	err := p.withStatementTimeoutTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT `+eventColumns+` FROM events WHERE ledger BETWEEN $1 AND $2 ORDER BY id ASC`,
+			fromLedger, toLedger,
+		)
+		if err != nil {
+			return fmt.Errorf("querying events by ledger range [%d,%d]: %w", fromLedger, toLedger, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			e, err := scanEvent(rows)
+			if err != nil {
+				return err
+			}
+			events = append(events, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 // GetAddressSummary returns aggregate information about an address\'s event

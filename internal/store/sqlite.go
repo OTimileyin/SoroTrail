@@ -846,6 +846,48 @@ func (s *SQLite) DeleteEventsBeforeLedger(ctx context.Context, beforeLedger int6
 	return rows, nil
 }
 
+func (s *SQLite) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT network, id, contract_id, ledger, type, tx_hash, tx_index, op_index,
+		 in_successful_call, topics, value, created_at, raw_topic_xdr, raw_value_xdr
+		 FROM events WHERE ledger BETWEEN ? AND ? ORDER BY id ASC`,
+		fromLedger, toLedger)
+	if err != nil {
+		return nil, fmt.Errorf("querying events by ledger range [%d,%d]: %w", fromLedger, toLedger, err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (s *SQLite) CountEventsBefore(ctx context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
+	var where string
+	var args []interface{}
+	where = "ledger < ?"
+	args = append(args, maxLedger)
+	if !beforeTime.IsZero() {
+		where += " AND created_at < ?"
+		args = append(args, beforeTime)
+	}
+	var total int64
+	query := "SELECT count(*) FROM (SELECT 1 FROM events WHERE " + where + " LIMIT " + fmt.Sprintf("%d", limit) + ")"
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("counting events before ledger %d: %w", maxLedger, err)
+	}
+	return total, nil
+}
+
 func (s *SQLite) GetAddressSummary(ctx context.Context, address string) (AddressSummary, error) {
 	var sum AddressSummary
 	sum.Address = address

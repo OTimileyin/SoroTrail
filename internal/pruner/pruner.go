@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sorotrail/sorotrail/internal/archive"
 	"github.com/sorotrail/sorotrail/internal/store"
 )
 
@@ -30,6 +31,10 @@ type Options struct {
 	// Interval is the sleep between full sweep attempts when there is
 	// nothing left to prune. Default 1h.
 	Interval time.Duration
+	// DryRun, when true, makes pruneOnce report what it would delete
+	// without actually removing any rows. Useful for validating retention
+	// policy before enabling real pruning.
+	DryRun bool
 }
 
 // DefaultValues used when Options fields are zero.
@@ -56,8 +61,9 @@ func (o *Options) applyDefaults() {
 // atomics on the Pruner so the JSON serialization sees plain values without
 // touching any internals.
 type Metrics struct {
-	RunsCompleted   uint64 `json:"runs_completed"`
-	TotalRowsPurged int64  `json:"total_rows_purged"`
+	RunsCompleted       uint64 `json:"runs_completed"`
+	TotalRowsPurged     int64  `json:"total_rows_purged"`
+	DryRunEligibleRows  int64  `json:"dry_run_eligible_rows,omitempty"`
 }
 
 // Pruner is the background retention-policy job.
@@ -68,13 +74,15 @@ type Metrics struct {
 // two Pruner instances concurrently is still unsupported (each would only
 // see its own counters).
 type Pruner struct {
-	store store.Store
-	log   *slog.Logger
-	opts  Options
+	store    store.Store
+	log      *slog.Logger
+	opts     Options
+	archiver archive.Archiver
 
 	// Atomics: written by Run, read by HTTP handlers via Metrics().
-	runsCompleted atomic.Uint64
-	rowsPurged    atomic.Int64
+	runsCompleted  atomic.Uint64
+	rowsPurged     atomic.Int64
+	dryRunEligible atomic.Int64
 }
 
 // Metrics returns a value-copy snapshot of the pruner's counters.
@@ -82,8 +90,9 @@ type Pruner struct {
 // forcing callers to take a lock.
 func (p *Pruner) Metrics() Metrics {
 	return Metrics{
-		RunsCompleted:   p.runsCompleted.Load(),
-		TotalRowsPurged: p.rowsPurged.Load(),
+		RunsCompleted:      p.runsCompleted.Load(),
+		TotalRowsPurged:    p.rowsPurged.Load(),
+		DryRunEligibleRows: int64(p.dryRunEligible.Load()),
 	}
 }
 
@@ -96,6 +105,13 @@ func New(st store.Store, log *slog.Logger, opts Options) *Pruner {
 		log:   log.With("component", "pruner"),
 		opts:  opts,
 	}
+}
+
+// SetArchiver attaches an optional Archiver. When set, each batch of
+// events is exported to the archiver before deletion so pruned data
+// remains recoverable. When nil, events are deleted directly.
+func (p *Pruner) SetArchiver(a archive.Archiver) {
+	p.archiver = a
 }
 
 // Enabled reports whether at least one retention policy is configured.
@@ -180,8 +196,21 @@ func (p *Pruner) pruneOnce(ctx context.Context) (int64, error) {
 	}
 
 	start := time.Now()
+	if p.opts.DryRun {
+		return p.dryRunSweep(ctx, maxLedger, beforeTime)
+	}
+
+	// When an archiver is configured, export each batch before deleting
+	// so pruned events remain recoverable from object storage.
 	var total int64
 	for {
+		// Fetch the batch that would be deleted.
+		if p.archiver != nil {
+			if err := p.archiveBatch(ctx, maxLedger, beforeTime); err != nil {
+				return total, fmt.Errorf("archive batch: %w", err)
+			}
+		}
+
 		affected, err := p.store.DeleteEventsBefore(ctx, maxLedger, beforeTime, p.opts.BatchSize)
 		if err != nil {
 			return total, fmt.Errorf("delete batch: %w", err)
@@ -210,6 +239,61 @@ func (p *Pruner) pruneOnce(ctx context.Context) (int64, error) {
 		)
 	} else {
 		p.log.Debug("prune sweep: nothing to delete",
+			"max_ledger", maxLedger,
+			"before_time", beforeTime,
+		)
+	}
+	return total, nil
+}
+
+// archiveBatch fetches events that are about to be deleted and exports
+// them to the archiver. The archive must succeed before deletion proceeds.
+func (p *Pruner) archiveBatch(ctx context.Context, maxLedger int64, beforeTime time.Time) error {
+	// Fetch events that will be deleted in this batch. We use a
+	// generous range to capture everything below maxLedger.
+	events, err := p.store.GetEventsByLedgerRange(ctx, 2, maxLedger-1)
+	if err != nil {
+		return fmt.Errorf("fetching events for archival: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	// Archive the entire batch as one chunk.
+	if _, _, err := p.archiver.ArchiveEvents(ctx, events, 2, maxLedger-1); err != nil {
+		return fmt.Errorf("archiving events: %w", err)
+	}
+	return nil
+}
+
+// dryRunSweep reports what pruneOnce would delete without removing any
+// rows. It uses CountEventsBefore to count eligible rows in batches.
+func (p *Pruner) dryRunSweep(ctx context.Context, maxLedger int64, beforeTime time.Time) (int64, error) {
+	var total int64
+	for {
+		affected, err := p.store.CountEventsBefore(ctx, maxLedger, beforeTime, p.opts.BatchSize)
+		if err != nil {
+			return total, fmt.Errorf("dry-run count batch: %w", err)
+		}
+		total += affected
+
+		if affected < int64(p.opts.BatchSize) {
+			break
+		}
+
+		if !sleepCtx(ctx, p.opts.Pause) {
+			return total, ctx.Err()
+		}
+	}
+	p.dryRunEligible.Add(total)
+
+	if total > 0 {
+		p.log.Info("dry-run prune sweep: would delete",
+			"rows_eligible", total,
+			"max_ledger", maxLedger,
+			"before_time", beforeTime,
+		)
+	} else {
+		p.log.Debug("dry-run prune sweep: nothing to delete",
 			"max_ledger", maxLedger,
 			"before_time", beforeTime,
 		)

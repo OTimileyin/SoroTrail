@@ -430,6 +430,22 @@ func (m *mockStore) DeleteEventsBefore(context.Context, int64, time.Time, int) (
 	return 0, nil
 }
 
+func (m *mockStore) GetEventsByLedgerRange(_ context.Context, fromLedger, toLedger int64) ([]store.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.Event
+	for _, e := range m.events {
+		if e.Ledger >= fromLedger && e.Ledger <= toLedger {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
+	return 0, nil
+}
+
 func (m *mockStore) UpsertAddressRefs(context.Context, []store.AddressRef) error { return nil }
 func (m *mockStore) QueryAddressEvents(context.Context, string, store.EventFilter) ([]store.Event, string, error) {
 	return nil, "", nil

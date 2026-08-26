@@ -167,6 +167,15 @@ func (m *mockStore) Ping(context.Context) error { return nil }
 func (m *mockStore) Stats(context.Context, store.Scope) (store.Stats, error) {
 	return store.Stats{}, nil
 }
+func (m *mockStore) DeleteEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
+	return 0, nil
+}
+func (m *mockStore) GetEventsByLedgerRange(context.Context, int64, int64) ([]store.Event, error) {
+	return nil, nil
+}
+func (m *mockStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
+	return 0, nil
+}
 
 // ---------- Tests ----------
 

@@ -288,6 +288,42 @@ func TestColdStart_ExplicitStartLedgerOverrides(t *testing.T) {
 	assert.Equal(t, uint32(1_234), client.eventsRequests[0].StartLedger)
 }
 
+func TestColdStart_ExplicitStartLedgerRejectedWhenBelowRetention(t *testing.T) {
+	client := &mockRPC{
+		health:      rpc.Health{Status: "healthy", LatestLedger: 50_000, OldestLedger: 40_000},
+		eventsResps: []rpc.GetEventsResponse{{LatestLedger: 50_000}},
+	}
+	ing := newTestIngester(client, newMockStore(), Options{StartLedger: 100})
+
+	_, err := ing.runOnce(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "below the RPC's oldest retained ledger")
+}
+
+func TestColdStart_RelativeOffsetResolved(t *testing.T) {
+	client := &mockRPC{
+		health:      rpc.Health{Status: "healthy", LatestLedger: 100_000, OldestLedger: 10},
+		eventsResps: []rpc.GetEventsResponse{{LatestLedger: 100_000}},
+	}
+	ing := newTestIngester(client, newMockStore(), Options{StartLedgerRaw: "latest-5000"})
+
+	_, err := ing.runOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, uint32(95_000), client.eventsRequests[0].StartLedger)
+}
+
+func TestColdStart_RelativeOffsetRejectedWhenBelowRetention(t *testing.T) {
+	client := &mockRPC{
+		health:      rpc.Health{Status: "healthy", LatestLedger: 50_000, OldestLedger: 40_000},
+		eventsResps: []rpc.GetEventsResponse{{LatestLedger: 50_000}},
+	}
+	ing := newTestIngester(client, newMockStore(), Options{StartLedgerRaw: "latest-20000"})
+
+	_, err := ing.runOnce(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "below the RPC's oldest retained ledger")
+}
+
 func TestWarmStart_ResumesAfterLastIngestedLedger(t *testing.T) {
 	client := &mockRPC{eventsResps: []rpc.GetEventsResponse{{LatestLedger: 1_000}}}
 	st := newMockStore()
@@ -1211,7 +1247,7 @@ func TestWindowSweep_ParallelBatchesReclampsOnOOR(t *testing.T) {
 		},
 	}
 	ing := newTestIngester(client, st, Options{
-		StartLedger:      100,
+		StartLedger:      40_000,
 		SweepWindow:      1_000,
 		PageLimit:        100,
 		SweepConcurrency: 4,

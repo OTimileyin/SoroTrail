@@ -66,6 +66,16 @@ func (s *stubStore) ListWatchedContracts(_ context.Context) ([]store.WatchedCont
 	return s.watchedList, s.watchedListErr
 }
 
+func (s *stubStore) DeleteEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
+	return 0, nil
+}
+func (s *stubStore) GetEventsByLedgerRange(context.Context, int64, int64) ([]store.Event, error) {
+	return nil, nil
+}
+func (s *stubStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
+	return 0, nil
+}
+
 // newGraphQLTestServer wires the stub store and returns a Handler.
 func newGraphQLTestServer(t *testing.T, st *stubStore) *Handler {
 	t.Helper()

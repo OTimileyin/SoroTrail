@@ -468,3 +468,30 @@ func (s *guardedStore) GetAddressSummary(ctx context.Context, address string) (A
 	s.logSlowQuery("store.GetAddressSummary", start, err)
 	return summary, err
 }
+
+func (s *guardedStore) DeleteEventsBefore(ctx context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
+	ctx, cancel := s.wrapContext(ctx, "store.DeleteEventsBefore")
+	defer cancel()
+	start := time.Now()
+	n, err := s.Store.DeleteEventsBefore(ctx, maxLedger, beforeTime, limit)
+	s.logSlowQuery("store.DeleteEventsBefore", start, err)
+	return n, err
+}
+
+func (s *guardedStore) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	ctx, cancel := s.wrapContext(ctx, "store.GetEventsByLedgerRange")
+	defer cancel()
+	start := time.Now()
+	events, err := s.Store.GetEventsByLedgerRange(ctx, fromLedger, toLedger)
+	s.logSlowQuery("store.GetEventsByLedgerRange", start, err)
+	return events, err
+}
+
+func (s *guardedStore) CountEventsBefore(ctx context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error) {
+	ctx, cancel := s.wrapContext(ctx, "store.CountEventsBefore")
+	defer cancel()
+	start := time.Now()
+	n, err := s.Store.CountEventsBefore(ctx, maxLedger, beforeTime, limit)
+	s.logSlowQuery("store.CountEventsBefore", start, err)
+	return n, err
+}

@@ -228,6 +228,8 @@ func (s *stubStore) ListContractsNeedingRefresh(_ context.Context, _ time.Time) 
 	return s.contractIDs, s.refreshErr
 }
 func (s *stubStore) CountContractEvents(context.Context, string) (int64, error) { return 0, nil }
+func (s *stubStore) GetEventsByLedgerRange(context.Context, int64, int64) ([]store.Event, error) { return nil, nil }
+func (s *stubStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) { return 0, nil }
 
 // makeSymbolResult returns a simulateTransaction result that encodes a
 // symbol ScVal. The result JSON is a string containing base64-encoded XDR.
