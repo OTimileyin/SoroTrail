@@ -442,3 +442,15 @@ func (m *mockStore) GetAddressSummary(context.Context, string) (store.AddressSum
 func (m *mockStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
 	return 0, nil
 }
+
+func (m *mockStore) GetEventsByLedgerRange(_ context.Context, fromLedger, toLedger int64) ([]store.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.Event
+	for _, e := range m.events {
+		if e.Ledger >= fromLedger && e.Ledger <= toLedger {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}

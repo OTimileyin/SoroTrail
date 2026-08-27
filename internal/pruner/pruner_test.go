@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sorotrail/sorotrail/internal/store"
+"github.com/sorotrail/sorotrail/internal/archive"
 )
 
 // mockStore implements store.Store for testing the pruner.
@@ -437,4 +438,56 @@ func TestPrunerDryRunMetrics(t *testing.T) {
 	m := prn.Metrics()
 	assert.Equal(t, int64(0), m.TotalRowsPurged, "dry-run must not count as purged")
 	assert.Equal(t, int64(5), m.DryRunEligibleRows, "dry-run must report eligible rows")
+}
+
+func (m *mockStore) GetEventsByLedgerRange(_ context.Context, fromLedger, toLedger int64) ([]store.Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.Event
+	for _, e := range m.events {
+		if e.Ledger >= fromLedger && e.Ledger <= toLedger {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+type mockArchiver struct {
+	mu       sync.Mutex
+	batches  []archive.Manifest
+}
+
+func (a *mockArchiver) ArchiveEvents(_ context.Context, events []store.Event, fromLedger, toLedger int64) (string, archive.Manifest, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	m := archive.Manifest{FromLedger: fromLedger, ToLedger: toLedger, EventCount: len(events)}
+	a.batches = append(a.batches, m)
+	return "mock://archive", m, nil
+}
+
+func (a *mockArchiver) archivedCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.batches)
+}
+
+func TestPrunerArchivesBeforeDelete(t *testing.T) {
+	st := newMockStore()
+	st.setIngestionState(100)
+	st.addEvent("e1", 50, time.Now().Add(-24*time.Hour))
+	st.addEvent("e2", 90, time.Now().Add(-24*time.Hour))
+
+	arch := &mockArchiver{}
+	prn := New(st, slog.New(slog.NewTextHandler(nopWriter{}, nil)), Options{
+		MinLedger: 80,
+		BatchSize: 10,
+	})
+	prn.SetArchiver(arch)
+	require.True(t, prn.Enabled())
+
+	total, err := prn.pruneOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total, "e1 should be deleted")
+	assert.Equal(t, 1, st.eventCount(), "e2 should remain")
+	assert.Equal(t, 1, arch.archivedCount(), "archiver should have been called once")
 }

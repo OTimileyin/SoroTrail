@@ -409,6 +409,14 @@ func (s *guardedStore) CountEventsBefore(ctx context.Context, maxLedger int64, b
 	s.logSlowQuery("store.CountEventsBefore", start, err)
 	return n, err
 }
+func (s *guardedStore) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	ctx, cancel := s.wrapContext(ctx, "store.GetEventsByLedgerRange")
+	defer cancel()
+	start := time.Now()
+	events, err := s.Store.GetEventsByLedgerRange(ctx, fromLedger, toLedger)
+	s.logSlowQuery("store.GetEventsByLedgerRange", start, err)
+	return events, err
+}
 func (s *guardedStore) MigrationVersion(ctx context.Context) (int, bool, error) {
 	// Migration version queries are cheap — no timeout needed.
 	return s.Store.MigrationVersion(ctx)

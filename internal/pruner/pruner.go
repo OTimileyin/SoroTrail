@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sorotrail/sorotrail/internal/archive"
 	"github.com/sorotrail/sorotrail/internal/store"
 )
 
@@ -72,9 +73,10 @@ type Metrics struct {
 // two Pruner instances concurrently is still unsupported (each would only
 // see its own counters).
 type Pruner struct {
-	store store.Store
-	log   *slog.Logger
-	opts  Options
+	store    store.Store
+	log      *slog.Logger
+	opts     Options
+	archiver archive.Archiver
 
 	// Atomics: written by Run, read by HTTP handlers via Metrics().
 	runsCompleted  atomic.Uint64
@@ -102,6 +104,12 @@ func New(st store.Store, log *slog.Logger, opts Options) *Pruner {
 		log:   log.With("component", "pruner"),
 		opts:  opts,
 	}
+}
+
+// SetArchiver attaches an optional Archiver. When set, each batch of
+// events is exported before deletion so pruned data remains recoverable.
+func (p *Pruner) SetArchiver(a archive.Archiver) {
+	p.archiver = a
 }
 
 // Enabled reports whether at least one retention policy is configured.
@@ -192,6 +200,13 @@ func (p *Pruner) pruneOnce(ctx context.Context) (int64, error) {
 
 	var total int64
 	for {
+		// When an archiver is configured, export each batch before deleting.
+		if p.archiver != nil {
+			if err := p.archiveBatch(ctx, maxLedger, beforeTime); err != nil {
+				return total, fmt.Errorf("archive batch: %w", err)
+			}
+		}
+
 		affected, err := p.store.DeleteEventsBefore(ctx, maxLedger, beforeTime, p.opts.BatchSize)
 		if err != nil {
 			return total, fmt.Errorf("delete batch: %w", err)
@@ -225,6 +240,22 @@ func (p *Pruner) pruneOnce(ctx context.Context) (int64, error) {
 		)
 	}
 	return total, nil
+}
+
+// archiveBatch fetches events that are about to be deleted and exports
+// them to the archiver before deletion proceeds.
+func (p *Pruner) archiveBatch(ctx context.Context, maxLedger int64, beforeTime time.Time) error {
+	events, err := p.store.GetEventsByLedgerRange(ctx, 2, maxLedger-1)
+	if err != nil {
+		return fmt.Errorf("fetching events for archival: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+	if _, _, err := p.archiver.ArchiveEvents(ctx, events, 2, maxLedger-1); err != nil {
+		return fmt.Errorf("archiving events: %w", err)
+	}
+	return nil
 }
 
 // dryRunSweep reports what pruneOnce would delete without removing any

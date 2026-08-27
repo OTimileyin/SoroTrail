@@ -782,6 +782,10 @@ type Store interface {
 	// (when beforeTime is non-zero) older than beforeTime. Used by the
 	// pruner in dry-run mode to report eligible rows without deleting.
 	CountEventsBefore(ctx context.Context, maxLedger int64, beforeTime time.Time, limit int) (int64, error)
+	// GetEventsByLedgerRange returns all events in the inclusive
+	// [fromLedger, toLedger] range, ordered by ID ascending. Used by
+	// the archiver to export batches before the pruner deletes them.
+	GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error)
 
 	// UpsertAddressRefs inserts address→event index rows idempotently.
 	// Duplicate (address, event_id, role) combinations are silently ignored.

@@ -393,3 +393,7 @@ func TestVirtualChain_GetEvents_OutOfRange(t *testing.T) {
 func (m *mockStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
 	return 0, nil
 }
+
+func (m *mockStore) GetEventsByLedgerRange(context.Context, int64, int64) ([]store.Event, error) {
+	return nil, nil
+}

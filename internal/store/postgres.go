@@ -1436,6 +1436,33 @@ func (p *Postgres) CountEventsBefore(ctx context.Context, maxLedger int64, befor
 	return total, nil
 }
 
+// GetEventsByLedgerRange returns all events in the inclusive [fromLedger, toLedger] range.
+func (p *Postgres) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	var events []Event
+	err := p.withStatementTimeoutTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT `+eventColumns+` FROM events WHERE ledger BETWEEN $1 AND $2 ORDER BY id ASC`,
+			fromLedger, toLedger,
+		)
+		if err != nil {
+			return fmt.Errorf("querying events by ledger range [%d,%d]: %w", fromLedger, toLedger, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			e, err := scanEvent(rows)
+			if err != nil {
+				return err
+			}
+			events = append(events, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 // DeleteEventsBefore deletes up to limit events that are strictly below
 // maxLedger and (if beforeTime is non-zero) older than beforeTime. It is
 // designed for the background pruner and intentionally never touches rows

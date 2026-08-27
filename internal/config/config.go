@@ -64,6 +64,14 @@ type Config struct {
 	// would delete without actually removing any rows.
 	RetentionDryRun bool `env:"RETENTION_DRY_RUN"`
 
+	// Archive configuration. When ARCHIVE_ENABLED is true the pruner
+	// exports each batch to object storage before deleting it.
+	ArchiveEnabled  bool   `env:"ARCHIVE_ENABLED"`
+	ArchiveBucket   string `env:"ARCHIVE_BUCKET"`
+	ArchiveRegion   string `env:"ARCHIVE_REGION" envDefault:"us-east-1"`
+	ArchiveEndpoint string `env:"ARCHIVE_ENDPOINT"`
+	ArchivePrefix   string `env:"ARCHIVE_PREFIX" envDefault:"sorotrail/"`
+
 	// LagWarnLedgers triggers a warn-level log when the ingester falls this
 	// many ledgers behind the chain head. Zero disables the alarm.
 	LagWarnLedgers uint32 `env:"LAG_WARN_LEDGERS" envDefault:"100"`
@@ -408,6 +416,11 @@ func (c Config) Validate() error {
 	}
 	if c.RetentionMaxAge < 0 {
 		return fmt.Errorf("RETENTION_MAX_AGE must be non-negative")
+	}
+	if c.ArchiveEnabled {
+		if c.ArchiveBucket == "" {
+			return fmt.Errorf("ARCHIVE_BUCKET is required when ARCHIVE_ENABLED is true")
+		}
 	}
 	if c.BackfillRateRPS <= 0 {
 		return fmt.Errorf("BACKFILL_RATE_RPS must be positive, got %v", c.BackfillRateRPS)

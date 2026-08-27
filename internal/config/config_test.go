@@ -1290,3 +1290,14 @@ func TestLoad_MultiTenancy(t *testing.T) {
 		})
 	}
 }
+
+func TestArchiveValidation(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/db")
+	t.Setenv("ARCHIVE_ENABLED", "true")
+	_, err := Load()
+	require.ErrorContains(t, err, "ARCHIVE_BUCKET is required")
+
+	t.Setenv("ARCHIVE_BUCKET", "my-bucket")
+	_, err = Load()
+	require.NoError(t, err)
+}

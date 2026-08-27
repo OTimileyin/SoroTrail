@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sorotrail/sorotrail/internal/api"
+"github.com/sorotrail/sorotrail/internal/archive"
 	"github.com/sorotrail/sorotrail/internal/api/graphql"
 	"github.com/sorotrail/sorotrail/internal/audit"
 	"github.com/sorotrail/sorotrail/internal/broadcast"
@@ -295,6 +296,17 @@ func run() error {
 		Interval:  cfg.RetentionInterval,
 		DryRun:    cfg.RetentionDryRun,
 	})
+	if cfg.ArchiveEnabled {
+		archiver := archive.NewFS(archive.Options{
+			Dir:    ".",
+			Prefix: cfg.ArchivePrefix,
+		}, log)
+		prn.SetArchiver(archiver)
+		log.Info("archive enabled",
+			"bucket", cfg.ArchiveBucket,
+			"prefix", cfg.ArchivePrefix,
+		)
+	}
 	if cfg.RetentionEnabled() {
 		api.SetPruner(prn)
 	}

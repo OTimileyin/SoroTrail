@@ -2706,3 +2706,7 @@ func (m *stubStore) CountDeliveryAttempts(context.Context, int64, store.Subscrip
 func (s *stubStore) CountEventsBefore(context.Context, int64, time.Time, int) (int64, error) {
 	return 0, nil
 }
+
+func (s *stubStore) GetEventsByLedgerRange(context.Context, int64, int64) ([]store.Event, error) {
+	return nil, nil
+}

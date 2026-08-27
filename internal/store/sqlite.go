@@ -862,6 +862,29 @@ func (s *SQLite) CountEventsBefore(ctx context.Context, maxLedger int64, beforeT
 	}
 	return total, nil
 }
+func (s *SQLite) GetEventsByLedgerRange(ctx context.Context, fromLedger, toLedger int64) ([]Event, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT network, id, contract_id, ledger, type, tx_hash, tx_index, op_index,
+		 in_successful_call, topics, value, created_at, raw_topic_xdr, raw_value_xdr
+		 FROM events WHERE ledger BETWEEN ? AND ? ORDER BY id ASC`,
+		fromLedger, toLedger)
+	if err != nil {
+		return nil, fmt.Errorf("querying events by ledger range [%d,%d]: %w", fromLedger, toLedger, err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
 
 func (s *SQLite) GetAddressSummary(ctx context.Context, address string) (AddressSummary, error) {
 	var sum AddressSummary

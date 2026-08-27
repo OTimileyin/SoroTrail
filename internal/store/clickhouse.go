@@ -274,6 +274,10 @@ func (c *ClickHouse) CountEventsBefore(context.Context, int64, time.Time, int) (
 	return 0, nil
 }
 
+func (c *ClickHouse) GetEventsByLedgerRange(context.Context, int64, int64) ([]Event, error) {
+	return nil, nil
+}
+
 func (c *ClickHouse) DeadLetterEvent(context.Context, DeadLetterInput) (DeadLetter, error) {
 	return DeadLetter{}, nil
 }
